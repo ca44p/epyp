@@ -1,65 +1,79 @@
 import os
 import subprocess
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import zipfile #Import the zipfile library
+import sys
+import shutil
 
-# ... (rest of your PS2 environment configuration) ...
+# --- PS2 Environment Configuration (Adjust these paths!) ---
+PS2_GCC = "ps2-gcc"
+PS2_LD = "ps2-ld"
+PS2_OBJCOPY = "ps2-objcopy"
+PS2_EE_MAKER = "ee-maker"
+# --- End of PS2 Environment Configuration ---
 
-def process_directory_or_zip(input_path, output_elf_path, output_ee_path):
-    """Handles both directories and zip files."""
-    if input_path.lower().endswith(".zip"):
-        # Handle zip file
-        try:
-            with zipfile.ZipFile(input_path, 'r') as zip_ref:
-                temp_dir = "temp_extracted" # temp directory for extraction
-                os.makedirs(temp_dir, exist_ok=True)
-                zip_ref.extractall(temp_dir)
-                compile_elf(temp_dir, output_elf_path)
-                create_ee(output_elf_path, output_ee_path)
-                #cleanup
-                for filename in os.listdir(temp_dir):
-                    file_path = os.path.join(temp_dir, filename)
-                    try:
-                        if os.path.isfile(file_path) or os.path.islink(file_path):
-                            os.unlink(file_path)
-                        elif os.path.isdir(file_path):
-                            shutil.rmtree(file_path)
-                    except Exception as e:
-                        print('Failed to delete %s. Reason: %s' % (file_path, e))
+def compile_elf(c_files_dir, output_elf_path):
+    """Compiles C files in a directory into an ELF file for PS2."""
+    try:
+        c_files = [os.path.join(c_files_dir, f) for f in os.listdir(c_files_dir) if f.endswith('.c')]
 
-                os.rmdir(temp_dir) #remove empty directory
-        except zipfile.BadZipFile:
-            messagebox.showerror("Error", "Invalid zip file.")
+        if not c_files:
+            print("Error: No C files found in the selected directory.")
             return
 
-    else:
-        # Handle directory
-        compile_elf(input_path, output_elf_path)
-        create_ee(output_elf_path, output_ee_path)
+        object_files = []
+        for c_file in c_files:
+            object_file = os.path.splitext(c_file)[0] + ".o"
+            compile_command = [PS2_GCC, "-O2", "-G0", "-c", c_file, "-o", object_file]
+            subprocess.run(compile_command, check=True)
+            object_files.append(object_file)
 
-# ... (rest of your GUI functions) ...
+        link_command = [PS2_LD, "-Ttext=0x00100000", "-o", output_elf_path] + object_files
+        subprocess.run(link_command, check=True)
 
-def select_input_path():
-    """Allows selecting a directory or a zip file."""
-    input_path = filedialog.askopenfilename(filetypes=[("C Source (Directory or Zip)", "*"), ("ZIP files", "*.zip")])
-    if input_path:
-        directory_entry.delete(0, tk.END)
-        directory_entry.insert(0, input_path)
+        for obj_file in object_files:
+            os.remove(obj_file)
 
-# ... (rest of your GUI setup) ...
+        print(f"ELF file created: {output_elf_path}")
 
-#Modify the compile button:
-def compile_and_create_ee():
-    input_path = directory_entry.get()
-    elf_output_path = elf_output_entry.get()
-    ee_output_path = ee_output_entry.get()
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Compilation failed: {e}")
+    except FileNotFoundError as e:
+        print(f"Error: Compiler or linker not found: {e}")
+    except Exception as e:
+        print(f"Error: An unexpected error occurred: {e}")
 
-    if not input_path or not elf_output_path or not ee_output_path:
-        messagebox.showerror("Error", "Please select all required paths.")
-        return
+def create_ee(elf_path, ee_path):
+    """Converts the ELF file to an EE file."""
+    try:
+        objcopy_command = [PS2_OBJCOPY, "-O", "binary", elf_path, "temp.bin"]
+        subprocess.run(objcopy_command, check=True)
 
-    process_directory_or_zip(input_path, elf_output_path, ee_output_path)
+        ee_maker_command = [PS2_EE_MAKER, "temp.bin", ee_path]
+        subprocess.run(ee_maker_command, check=True)
 
-#Modify GUI setup:
-directory_button = tk.Button(root, text="Browse", command=select_input_path) #change browse to select input path.
+        os.remove("temp.bin")
+
+        print(f"EE file created: {ee_path}")
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error: EE creation failed: {e}")
+    except FileNotFoundError as e:
+        print(f"Error: objcopy or ee-maker not found: {e}")
+    except Exception as e:
+        print(f"Error: An unexpected error occurred during EE creation: {e}")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: Drag and drop a folder onto this script.")
+        sys.exit(1)
+
+    folder_path = sys.argv[1]
+
+    if not os.path.isdir(folder_path):
+        print("Error: Invalid folder path.")
+        sys.exit(1)
+
+    elf_output_path = os.path.join(folder_path, "output.elf")
+    ee_output_path = os.path.join(folder_path, "output.ee")
+
+    compile_elf(folder_path, elf_output_path)
+    create_ee(elf_output_path, ee_output_path)
